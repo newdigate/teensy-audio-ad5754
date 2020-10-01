@@ -4,8 +4,7 @@
 
 DMAChannel dma(false);
 
-static volatile uint8_t sinetable[] = {
-0,   1,    2,    3,    4,    5};
+static volatile uint8_t buf[] = {0,0,0,0,0,0};
 
 unsigned long lastMillis = 0;
 unsigned long currentValue = 0;
@@ -38,15 +37,12 @@ void isr(void)
   count++;
 
   if (count < 4) { 
-    // first 3 bytes -> DAC0
-    sinetable[0] = count;                   //DAC0, channel=count
-    sinetable[1] = voltages[count] >> 8;
-    sinetable[2] = voltages[count] & 0xff;
-    
-    // second 3 bytes -> DAC1
-    sinetable[3] = count;                   //DAC1, channel=count
-    sinetable[4] = voltages[count+4] >> 8;
-    sinetable[5] = voltages[count+4] & 0xff;
+    buf[0] = count;                   //DAC0, channel=count
+    buf[1] = voltages[count] >> 8;
+    buf[2] = voltages[count] & 0xff;  
+    buf[3] = count;                   //DAC1, channel=count
+    buf[4] = voltages[count+4] >> 8;
+    buf[5] = voltages[count+4] & 0xff;
     beginTransfer();
   }
 }
@@ -79,15 +75,15 @@ void setup() {
 
   SPI.begin();
 
-  dma.TCD->SADDR = sinetable;
+  dma.TCD->SADDR = buf;
   dma.TCD->SOFF = 1;
   dma.TCD->ATTR = DMA_TCD_ATTR_SSIZE(0) | DMA_TCD_ATTR_DSIZE(0);
   dma.TCD->NBYTES_MLNO = 1;
-  dma.TCD->SLAST = -sizeof(sinetable);
+  dma.TCD->SLAST = -sizeof(buf);
   dma.TCD->DOFF = 0;
-  dma.TCD->CITER_ELINKNO = sizeof(sinetable);
+  dma.TCD->CITER_ELINKNO = sizeof(buf);
   dma.TCD->DLASTSGA = 0;
-  dma.TCD->BITER_ELINKNO = sizeof(sinetable);
+  dma.TCD->BITER_ELINKNO = sizeof(buf);
   dma.TCD->CSR = DMA_TCD_CSR_INTMAJOR;
   dma.TCD->DADDR = (void *)((uint32_t)&(IMXRT_LPSPI4_S.TDR));
   dma.triggerAtHardwareEvent(DMAMUX_SOURCE_LPSPI4_TX);
@@ -107,14 +103,14 @@ void loop() {
     count = 0;
     currentValue++;
     // first 3 bytes -> DAC0
-    sinetable[0] = 0x00;              // channel == 0
-    sinetable[1] = voltages[0] >> 8;
-    sinetable[2] = voltages[0] & 0xff;
+    buf[0] = 0x00;              // channel == 0
+    buf[1] = voltages[0] >> 8;
+    buf[2] = voltages[0] & 0xff;
 
     // second 3 bytes -> DAC1
-    sinetable[3] = 0x00;              // channel == 0
-    sinetable[4] = voltages[4] >> 8;
-    sinetable[5] = voltages[4] & 0xff;
+    buf[3] = 0x00;              // channel == 0
+    buf[4] = voltages[4] >> 8;
+    buf[5] = voltages[4] & 0xff;
 
     beginTransfer();
   }
