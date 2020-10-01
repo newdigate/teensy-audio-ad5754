@@ -4,8 +4,12 @@
 
 DMAChannel dma(false);
 
-static volatile uint16_t sinetable[] = {
+static volatile uint8_t sinetable[] = {
 0,   1,    2,    3,    4,    5};
+
+unsigned long lastMillis = 0;
+unsigned long currentValue = 0;
+unsigned long voltages[] = {0,1,2,3,4,5,6,7};
 
 SPISettings _spiSettings;
 
@@ -32,7 +36,12 @@ void isr(void)
   digitalWrite(CS_PIN, HIGH); 
 
   count++;
+
   if (count < 4) { 
+    sinetable[1] = voltages[count] >> 8;
+    sinetable[2] = voltages[count] & 0xff;
+    sinetable[4] = voltages[count+4] >> 8;
+    sinetable[5] = voltages[count+4] & 0xff;
     beginTransfer();
   }
 }
@@ -48,8 +57,6 @@ void beginTransfer() {
   SPI.beginTransaction(SPISettings());
   dma.enable();
 }
-
-unsigned long lastMillis = 0;
 
 void setup() {
   
@@ -68,14 +75,14 @@ void setup() {
   SPI.begin();
 
   dma.TCD->SADDR = sinetable;
-  dma.TCD->SOFF = 2;
-  dma.TCD->ATTR = DMA_TCD_ATTR_SSIZE(1) | DMA_TCD_ATTR_DSIZE(1);
-  dma.TCD->NBYTES_MLNO = 2;
+  dma.TCD->SOFF = 1;
+  dma.TCD->ATTR = DMA_TCD_ATTR_SSIZE(0) | DMA_TCD_ATTR_DSIZE(0);
+  dma.TCD->NBYTES_MLNO = 1;
   dma.TCD->SLAST = -sizeof(sinetable);
   dma.TCD->DOFF = 0;
-  dma.TCD->CITER_ELINKNO = sizeof(sinetable)/2;
+  dma.TCD->CITER_ELINKNO = sizeof(sinetable);
   dma.TCD->DLASTSGA = 0;
-  dma.TCD->BITER_ELINKNO = sizeof(sinetable)/2;
+  dma.TCD->BITER_ELINKNO = sizeof(sinetable);
   dma.TCD->CSR = DMA_TCD_CSR_INTMAJOR;
   dma.TCD->DADDR = (void *)((uint32_t)&(IMXRT_LPSPI4_S.TDR));
   dma.triggerAtHardwareEvent(DMAMUX_SOURCE_LPSPI4_TX);
@@ -93,6 +100,15 @@ void loop() {
   if (currentMillis > lastMillis + 1) {
     lastMillis = currentMillis;
     count = 0;
+    currentValue++;
+    sinetable[0] = 0x18;
+    sinetable[1] = voltages[0] >> 8;
+    sinetable[2] = voltages[0] & 0xff;
+
+    sinetable[3] = 0x18;
+    sinetable[4] = voltages[4] >> 8;
+    sinetable[5] = voltages[4] & 0xff;
+
     beginTransfer();
   }
 }
