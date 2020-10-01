@@ -38,8 +38,13 @@ void isr(void)
   count++;
 
   if (count < 4) { 
+    // first 3 bytes -> DAC0
+    sinetable[0] = count;                   //DAC0, channel=count
     sinetable[1] = voltages[count] >> 8;
     sinetable[2] = voltages[count] & 0xff;
+    
+    // second 3 bytes -> DAC1
+    sinetable[3] = count;                   //DAC1, channel=count
     sinetable[4] = voltages[count+4] >> 8;
     sinetable[5] = voltages[count+4] & 0xff;
     beginTransfer();
@@ -54,7 +59,7 @@ void beginTransfer() {
   // Lets try to output the first byte to make sure that we are in 8 bit mode...
   IMXRT_LPSPI4_S.DER = LPSPI_DER_TDDE;//| LPSPI_DER_RDDE; //enable DMA on both TX and RX
   IMXRT_LPSPI4_S.SR = 0x3f00; // clear out all of the other status...
-  SPI.beginTransaction(SPISettings());
+  SPI.beginTransaction(SPISettings(14000000, MSBFIRST, SPI_MODE0));
   dma.enable();
 }
 
@@ -101,11 +106,13 @@ void loop() {
     lastMillis = currentMillis;
     count = 0;
     currentValue++;
-    sinetable[0] = 0x18;
+    // first 3 bytes -> DAC0
+    sinetable[0] = 0x00;              // channel == 0
     sinetable[1] = voltages[0] >> 8;
     sinetable[2] = voltages[0] & 0xff;
 
-    sinetable[3] = 0x18;
+    // second 3 bytes -> DAC1
+    sinetable[3] = 0x00;              // channel == 0
     sinetable[4] = voltages[4] >> 8;
     sinetable[5] = voltages[4] & 0xff;
 
