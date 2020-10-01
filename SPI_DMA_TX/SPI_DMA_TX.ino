@@ -7,7 +7,6 @@ DMAChannel dma(false);
 static volatile uint8_t buf[] = {0,0,0,0,0,0};
 
 unsigned long lastMillis = 0;
-unsigned long currentValue = 0;
 unsigned long voltages[] = {0,1,2,3,4,5,6,7};
 
 SPISettings _spiSettings;
@@ -48,6 +47,18 @@ void isr(void)
 }
 
 void beginTransfer() {
+  if (count == 0) {
+    // first 3 bytes -> DAC0
+    buf[0] = 0x00;              // channel == 0
+    buf[1] = voltages[0] >> 8;
+    buf[2] = voltages[0] & 0xff;
+  
+    // second 3 bytes -> DAC1
+    buf[3] = 0x00;              // channel == 0
+    buf[4] = voltages[4] >> 8;
+    buf[5] = voltages[4] & 0xff;
+  }
+  
   digitalWrite(CS_PIN, LOW); 
   
   IMXRT_LPSPI4_S.TCR = (IMXRT_LPSPI4_S.TCR & ~(LPSPI_TCR_FRAMESZ(31))) | LPSPI_TCR_FRAMESZ(7);  
@@ -64,12 +75,14 @@ void setup() {
   pinMode(CS_PIN,  OUTPUT);
   digitalWrite(CS_PIN, HIGH); 
 
+#ifdef DEBUGGING
   Serial.begin(9600);
   while(!Serial) {
     delay(100);
   }
   delay(100);
   Serial.printf("Starting...\n");
+#endif
   
   dma.begin(true); // allocate the DMA channel first
 
@@ -101,16 +114,6 @@ void loop() {
   if (currentMillis > lastMillis + 1) {
     lastMillis = currentMillis;
     count = 0;
-    currentValue++;
-    // first 3 bytes -> DAC0
-    buf[0] = 0x00;              // channel == 0
-    buf[1] = voltages[0] >> 8;
-    buf[2] = voltages[0] & 0xff;
-
-    // second 3 bytes -> DAC1
-    buf[3] = 0x00;              // channel == 0
-    buf[4] = voltages[4] >> 8;
-    buf[5] = voltages[4] & 0xff;
 
     beginTransfer();
   }
