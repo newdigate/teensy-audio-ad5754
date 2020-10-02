@@ -54,106 +54,87 @@ void AudioOutputSPI::begin(void)
 	SPI.begin();
 
 	Serial.print("void AudioOutputSPI::begin(void)\n");
-	dma.begin(true); // Allocate the DMA channel first
 
     config_spi();
+    config_dma();
 
 	for (int i=0; i < 16; i++) {
 		block_input[i] = NULL;
 	}
-
-#if defined(__IMXRT1052__) || defined(__IMXRT1062__)
-	//CORE_PIN11_CONFIG  = 3;  //1:TX_DATA0
-
-	dma.TCD->SADDR = tdm_tx_buffer;
-	dma.TCD->SOFF = 4;
-	dma.TCD->ATTR = DMA_TCD_ATTR_SSIZE(2) | DMA_TCD_ATTR_DSIZE(2);
-	dma.TCD->NBYTES_MLNO = 4;
-	dma.TCD->SLAST = -sizeof(tdm_tx_buffer);
-	dma.TCD->DADDR = &IMXRT_LPSPI4_S.TDR;
-	dma.TCD->DOFF = 0;
-	dma.TCD->CITER_ELINKNO = sizeof(tdm_tx_buffer) / 4;
-	dma.TCD->DLASTSGA = 0;
-	dma.TCD->BITER_ELINKNO = sizeof(tdm_tx_buffer) / 4;
-	dma.TCD->CSR = DMA_TCD_CSR_INTHALF | DMA_TCD_CSR_INTMAJOR;
-	dma.triggerAtHardwareEvent(DMAMUX_SOURCE_LPSPI4_TX);
-	//        dma.triggerContinuously();
-
-	update_responsibility = update_setup();
-	Serial.printf("update_responsibility = %d\n", update_responsibility);
-
-
-
-	Serial.print("LP4.DER...\n");
-
-	//IMXRT_LPSPI4_S.TCR = (IMXRT_LPSPI4_S.TCR & ~(LPSPI_TCR_FRAMESZ(31))) | LPSPI_TCR_FRAMESZ(7);
-	//IMXRT_LPSPI4_S.FCR = 0;
-
-	// Lets try to output the first byte to make sure that we are in 8 bit mode...
-	IMXRT_LPSPI4_S.DER = LPSPI_DER_TDDE | LPSPI_DER_RDDE; //enable DMA on both TX and RX
-	IMXRT_LPSPI4_S.SR = 0x3f00 | LPSPI_SR_TDF; // Status Register: ??? + Transmit Data Flag
-
-
-
-    dma.enable();
-
-#endif
-	dma.attachInterrupt(isr);
 }
 
-// TODO: needs optimization...
-static void memcpy_tdm_tx(uint32_t *dest, const uint32_t *src1, const uint32_t *src2)
-{
-	uint32_t i, in1, in2, out1, out2;
-
-	for (i=0; i < AUDIO_BLOCK_SAMPLES/2; i++) {
-		in1 = *src1++;
-		in2 = *src2++;
-		out1 = (in1 << 16) | (in2 & 0xFFFF);
-		out2 = (in1 & 0xFFFF0000) | (in2 >> 16);
-		*dest = out1;
-		*(dest + 8) = out2;
-		dest += 16;
-	}
-}
 
 void AudioOutputSPI::isr(void)
 {
-	Serial.print(";");
-	uint32_t *dest;
-	const uint32_t *src1, *src2;
-	uint32_t i, saddr;
+    dma.clearInterrupt();
+    SPI.endTransaction();
 
-	saddr = (uint32_t)(dma.TCD->SADDR);
-	dma.clearInterrupt();
-	if (saddr < (uint32_t)tdm_tx_buffer + sizeof(tdm_tx_buffer) / 2) {
-		// DMA is transmitting the first half of the buffer
-		// so we must fill the second half
-		dest = tdm_tx_buffer + AUDIO_BLOCK_SAMPLES*8;
-	} else {
-		// DMA is transmitting the second half of the buffer
-		// so we must fill the first half
-		dest = tdm_tx_buffer;
-	}
-	if (update_responsibility) AudioStream::update_all();
-	for (i=0; i < 16; i += 2) {
-		src1 = block_input[i] ? (uint32_t *)(block_input[i]->data) : zeros;
-		src2 = block_input[i+1] ? (uint32_t *)(block_input[i+1]->data) : zeros;
-		memcpy_tdm_tx(dest, src1, src2);
-		dest++;
-	}
-	for (i=0; i < 16; i++) {
-		if (block_input[i]) {
-			release(block_input[i]);
-			block_input[i] = NULL;
-		}
-	}
+    IMXRT_LPSPI4_S.FCR = LPSPI_FCR_TXWATER(15); // _spi_fcr_save; // restore the FSR status...
+    IMXRT_LPSPI4_S.DER = 0;
+    IMXRT_LPSPI4_S.CR = LPSPI_CR_MEN | LPSPI_CR_RRF | LPSPI_CR_RTF; // actually clear both...
+    IMXRT_LPSPI4_S.SR = 0x3f00;    // clear out all of the other status...
+
+    while (IMXRT_LPSPI4_S.FSR & 0x1f);
+    while (IMXRT_LPSPI4_S.SR & LPSPI_SR_MBF) ;  //Status Register? Module Busy flag
+    digitalWrite(DA_SYNC, HIGH);
+
+    bytesReceived++;
+
+    if (bytesReceived < 4) {
+        buf[0] = bytesReceived;                   //DAC0, channel=count
+        buf[1] = voltages[bytesReceived] >> 8;
+        buf[2] = voltages[bytesReceived] & 0xff;
+        buf[3] = bytesReceived;                   //DAC1, channel=count
+        buf[4] = voltages[bytesReceived+4] >> 8;
+        buf[5] = voltages[bytesReceived+4] & 0xff;
+    } else {
+        bytesReceived = 0;
+    }
+
+    beginTransfer();
+}
+
+void AudioOutputSPI::beginTransfer()
+{
+    if (bytesReceived == 0) {
+
+        read_index++;
+        if (read_index == 128) return;
+
+        voltages[0] = (block_input[0] != NULL) ? block_input[0]->data[read_index] : 0;
+        voltages[1] = (block_input[1] != NULL) ? block_input[1]->data[read_index] : 0;
+        voltages[2] = (block_input[2] != NULL) ? block_input[2]->data[read_index] : 0;
+        voltages[3] = (block_input[3] != NULL) ? block_input[3]->data[read_index] : 0;
+        voltages[4] = (block_input[4] != NULL) ? block_input[4]->data[read_index] : 0;
+        voltages[5] = (block_input[5] != NULL) ? block_input[5]->data[read_index] : 0;
+        voltages[6] = (block_input[6] != NULL) ? block_input[6]->data[read_index] : 0;
+        voltages[7] = (block_input[7] != NULL) ? block_input[7]->data[read_index] : 0;
+
+        // first 3 bytes -> DAC0
+        buf[0] = 0x00;              // channel == 0
+        buf[1] = voltages[0] >> 8;
+        buf[2] = voltages[0] & 0xff;
+
+        // second 3 bytes -> DAC1
+        buf[3] = 0x00;              // channel == 0
+        buf[4] = voltages[4] >> 8;
+        buf[5] = voltages[4] & 0xff;
+    }
+
+    digitalWrite(DA_SYNC, LOW);
+
+    IMXRT_LPSPI4_S.TCR = (IMXRT_LPSPI4_S.TCR & ~(LPSPI_TCR_FRAMESZ(31))) | LPSPI_TCR_FRAMESZ(7);
+    IMXRT_LPSPI4_S.FCR = 0;
+    // Lets try to output the first byte to make sure that we are in 8 bit mode...
+    IMXRT_LPSPI4_S.DER = LPSPI_DER_TDDE;//| LPSPI_DER_RDDE; //enable DMA on both TX and RX
+    IMXRT_LPSPI4_S.SR = 0x3f00; // clear out all of the other status...
+    SPI.beginTransaction(SPISettings(14000000, MSBFIRST, SPI_MODE0));
+    dma.enable();
 }
 
 
 void AudioOutputSPI::update(void)
 {
-	//Serial.print("U");
 	audio_block_t *prev[16];
 	unsigned int i;
 
@@ -162,26 +143,34 @@ void AudioOutputSPI::update(void)
 		prev[i] = block_input[i];
 		block_input[i] = receiveReadOnly(i);
 	}
+	read_index = 0;
 	__enable_irq();
 	for (i=0; i < 16; i++) {
 		if (prev[i]) release(prev[i]);
 	}
 }
 
+void AudioOutputSPI::config_dma(void)
+{
+    dma.begin(true); // allocate the DMA channel first
+    dma.TCD->SADDR = buf;
+    dma.TCD->SOFF = 1;
+    dma.TCD->ATTR = DMA_TCD_ATTR_SSIZE(0) | DMA_TCD_ATTR_DSIZE(0);
+    dma.TCD->NBYTES_MLNO = 1;
+    dma.TCD->SLAST = -sizeof(buf);
+    dma.TCD->DOFF = 0;
+    dma.TCD->CITER_ELINKNO = sizeof(buf);
+    dma.TCD->DLASTSGA = 0;
+    dma.TCD->BITER_ELINKNO = sizeof(buf);
+    dma.TCD->CSR = DMA_TCD_CSR_INTMAJOR;
+    dma.TCD->DADDR = (void *)((uint32_t)&(IMXRT_LPSPI4_S.TDR));
+    dma.triggerAtHardwareEvent(DMAMUX_SOURCE_LPSPI4_TX);
+    dma.disableOnCompletion();
+    dma.attachInterrupt(isr);
+    dma.interruptAtCompletion();
+}
+
 void AudioOutputSPI::config_spi(void)
 {
-#if defined(__IMXRT1062__)
-//PLL:
-    int fs = AUDIO_SAMPLE_RATE_EXACT;
-    // PLL between 27*24 = 648MHz und 54*24=1296MHz
-    int n1 = 4; //SAI prescaler 4 => (n1*n2) = multiple of 4
-    int n2 = 1 + (24000000 * 27) / (fs * 256 * n1);
-
-    double C = ((double)fs * 256 * n1 * n2) / 24000000;
-    int c0 = C;
-    int c2 = 10000;
-    int c1 = C * c2 - (c0 * c2);
-    set_audioClock(c0, c1, c2);
-#endif
 }
 

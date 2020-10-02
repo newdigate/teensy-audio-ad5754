@@ -37,7 +37,12 @@
 class AudioOutputSPI : public AudioStream
 {
 public:
-	AudioOutputSPI(void) : AudioStream(16, inputQueueArray) { begin(); }
+	AudioOutputSPI(unsigned int da_sync) : AudioStream(16, inputQueueArray) {
+	    read_index = 0;
+	    bytesReceived = 0;
+	    DA_SYNC = da_sync;
+	    begin();
+	}
 	virtual void update(void);
 	void begin(void);
 	//friend class AudioInputTDM;
@@ -46,10 +51,19 @@ protected:
 	static bool update_responsibility;
 	static DMAChannel dma;
 	static void isr(void);
+    static void beginTransfer();
+    static unsigned int read_index;
 private:
 	audio_block_t *inputQueueArray[16];
 
 	void config_spi(void);
+	void config_dma(void);
+	static unsigned int DA_SYNC;
+
+    static volatile uint8_t buf[6];
+    static int voltages[8];
+    static unsigned int bytesReceived;
+
 };
 
 
