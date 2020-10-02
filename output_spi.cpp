@@ -33,14 +33,18 @@
 #include "utility/imxrt_hw.h"
 #include <SPI.h>
 #include <imxrt.h>
-
-audio_block_t * AudioOutputSPI::block_input[16] = {
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+#include <cstdint>
+audio_block_t * AudioOutputSPI::block_input[8] = {
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
 bool AudioOutputSPI::update_responsibility = false;
-static uint32_t zeros[AUDIO_BLOCK_SAMPLES/2];
-static uint32_t tdm_tx_buffer[AUDIO_BLOCK_SAMPLES*16];
+
+unsigned int AudioOutputSPI::read_index = 0;
+unsigned int AudioOutputSPI::DA_SYNC = 0;
+volatile uint8_t AudioOutputSPI::buf[6] = {0,0,0,0,0,0};
+int AudioOutputSPI::voltages[8] = {0,0,0,0,0,0,0,0};
+unsigned int AudioOutputSPI::bytesReceived = 0;
+
 DMAChannel AudioOutputSPI::dma(false);
 
 void AudioOutputSPI::begin(void)
