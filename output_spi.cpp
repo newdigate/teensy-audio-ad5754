@@ -147,8 +147,9 @@ void AudioOutputSPI::update(void)
 		prev[i] = block_input[i];
 		block_input[i] = receiveReadOnly(i);
 	}
-	read_index = 0;
 	__enable_irq();
+    read_index = 0;
+    beginTransfer();
 	for (i=0; i < 16; i++) {
 		if (prev[i]) release(prev[i]);
 	}
