@@ -49,12 +49,8 @@ DMAChannel AudioOutputSPI::dma(false);
 
 void AudioOutputSPI::begin(void)
 {
-	Serial.begin(9600);
-	while(!Serial) {
-		delay(200);
-	}
-	delay(200);
-
+    pinMode(DA_SYNC, OUTPUT);
+    
 	SPI.begin();
 
 	Serial.print("void AudioOutputSPI::begin(void)\n");
@@ -62,7 +58,7 @@ void AudioOutputSPI::begin(void)
     config_spi();
     config_dma();
 
-	for (int i=0; i < 16; i++) {
+	for (int i=0; i < 8; i++) {
 		block_input[i] = NULL;
 	}
 }
@@ -139,20 +135,24 @@ void AudioOutputSPI::beginTransfer()
 
 void AudioOutputSPI::update(void)
 {
+    //if (IMXRT_LPSPI4_S.SR & LPSPI_SR_MBF) return;  //already busy
+    //if (IMXRT_LPSPI4_S.FSR & 0x1f) return;
+
 	audio_block_t *prev[16];
 	unsigned int i;
 
 	__disable_irq();
-	for (i=0; i < 16; i++) {
+	for (i=0; i < 8; i++) {
 		prev[i] = block_input[i];
 		block_input[i] = receiveReadOnly(i);
 	}
 	__enable_irq();
-    read_index = 0;
-    beginTransfer();
-	for (i=0; i < 16; i++) {
+
+	for (i=0; i < 8; i++) {
 		if (prev[i]) release(prev[i]);
 	}
+    read_index = 0;
+    beginTransfer();
 }
 
 void AudioOutputSPI::config_dma(void)
