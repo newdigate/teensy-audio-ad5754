@@ -34,6 +34,7 @@
 #include <SPI.h>
 #include <imxrt.h>
 #include <cstdint>
+#include <DMAChannel.h>
 
 /* AD5754R Register Map */
 #define AD5754R_REG_DAC             0x00 // DAC register
@@ -61,12 +62,13 @@ audio_block_t * AudioOutputAD5754Dual::block_input[8] = {
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
 bool AudioOutputAD5754Dual::update_responsibility = false;
-
+bool AudioOutputAD5754Dual::enable_cable_select = true;
+unsigned int AudioOutputAD5754Dual::paddingCount = 0;
 unsigned int AudioOutputAD5754Dual::read_index = 0;
 unsigned int AudioOutputAD5754Dual::DA_SYNC = 16;
 volatile uint8_t AudioOutputAD5754Dual::buf[6] = {0,0,0,0,0,0};
 int AudioOutputAD5754Dual::voltages[8] = {0,0,0,0,0,0,0,0};
-unsigned int AudioOutputAD5754Dual::bytesTransmitted = 0;
+unsigned int AudioOutputAD5754Dual::commandsTransmitted = 0;
 
 DMAChannel AudioOutputAD5754Dual::dma(false);
 
@@ -145,19 +147,38 @@ void AudioOutputAD5754Dual::isr(void)
 
     while (IMXRT_LPSPI3_S.FSR & 0x1f);          //FIFO Status Register? wait until FIFO is empty before continuing...
     while (IMXRT_LPSPI3_S.SR & LPSPI_SR_MBF) ;  //Status Register? Module Busy flag, wait until SPI is not busy...
-    digitalWrite(DA_SYNC, HIGH);
+    if (enable_cable_select)
+        digitalWrite(DA_SYNC, HIGH);
 
-    bytesTransmitted++;
+    commandsTransmitted++;
 
-    if (bytesTransmitted < 4) {
-        buf[0] = bytesTransmitted;                   //DAC0, channel=count
-        buf[1] = voltages[bytesTransmitted] >> 8;
-        buf[2] = voltages[bytesTransmitted] & 0xff;
-        buf[3] = bytesTransmitted;                   //DAC1, channel=count
-        buf[4] = voltages[bytesTransmitted+4] >> 8;
-        buf[5] = voltages[bytesTransmitted+4] & 0xff;
+    if (commandsTransmitted < 4) {
+        buf[0] = commandsTransmitted;                   //DAC0, channel=count
+        buf[1] = voltages[commandsTransmitted] >> 8;
+        buf[2] = voltages[commandsTransmitted] & 0xff;
+        buf[3] = commandsTransmitted;                   //DAC1, channel=count
+        buf[4] = voltages[commandsTransmitted+4] >> 8;
+        buf[5] = voltages[commandsTransmitted+4] & 0xff;
+    } else  if (commandsTransmitted == 4) {
+        enable_cable_select = false;
+        buf[0] = 0xff;
+        buf[1] = 0xff;
+        buf[2] = 0xff;
+        buf[3] = 0xff;
+        buf[4] = 0xff;
+        paddingCount++;
+        paddingCount%=3;
+        int numberOfBytesToPad = (paddingCount == 0)? 5 : 6;
+        dma.TCD->SLAST = -numberOfBytesToPad;
+        dma.TCD->CITER_ELINKNO = numberOfBytesToPad;
+        dma.TCD->BITER_ELINKNO = numberOfBytesToPad;
     } else {
-        bytesTransmitted = 0;
+        enable_cable_select = true;
+        //restore dma buffer size
+        dma.TCD->SLAST = -sizeof(buf);
+        dma.TCD->CITER_ELINKNO = sizeof(buf);
+        dma.TCD->BITER_ELINKNO = sizeof(buf);
+        commandsTransmitted = 0;
     }
 
     beginTransfer();
@@ -165,7 +186,7 @@ void AudioOutputAD5754Dual::isr(void)
 const uint32_t zero_level = 0xFFFF / 2;
 void AudioOutputAD5754Dual::beginTransfer()
 {
-    if (bytesTransmitted == 0) {
+    if (commandsTransmitted == 0) {
 
         read_index++;
         if (read_index == 128) return;
@@ -190,7 +211,8 @@ void AudioOutputAD5754Dual::beginTransfer()
         buf[5] = voltages[4] & 0xff;
     }
 
-    digitalWrite(DA_SYNC, LOW);
+    if (enable_cable_select)
+        digitalWrite(DA_SYNC, LOW);
 
     IMXRT_LPSPI3_S.TCR = (IMXRT_LPSPI3_S.TCR & ~(LPSPI_TCR_FRAMESZ(31))) | LPSPI_TCR_FRAMESZ(7); // Transmit Control Register: ?
     IMXRT_LPSPI3_S.FCR = 0; // FIFO control register

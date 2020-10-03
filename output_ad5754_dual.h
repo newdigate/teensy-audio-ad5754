@@ -53,8 +53,10 @@ protected:
     static unsigned int read_index;
     static unsigned int DA_SYNC;
     static volatile uint8_t buf[6];
+    static unsigned int paddingCount;
     static int voltages[8];
-    static unsigned int bytesTransmitted;
+    static unsigned int commandsTransmitted;
+    static bool enable_cable_select;
 private:
 	audio_block_t *inputQueueArray[16];
 
