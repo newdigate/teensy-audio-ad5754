@@ -140,6 +140,6 @@ import_arduino_library(SD)
 
 teensy_add_executable(TeensyAudioSPILibrary
         main.cpp
-        output_spi.cpp
-        output_spi.h
+        output_ad5754_dual.cpp
+        output_ad5754_dual.h
         )

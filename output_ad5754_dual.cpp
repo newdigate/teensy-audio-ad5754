@@ -28,7 +28,7 @@
  */
 
 #include <Arduino.h>
-#include "output_spi.h"
+#include "output_ad5754_dual.h"
 #include "memcpy_audio.h"
 #include "utility/imxrt_hw.h"
 #include <SPI.h>
@@ -57,26 +57,27 @@
 #define AD5754R_BIPOLAR_10_RANGE    0x04 // -10...+10(V)
 #define AD5754R_BIPOLAR_10_8_RANGE  0x05 // -10.8...+10.8(V)
 
-audio_block_t * AudioOutputSPI::block_input[8] = {
+audio_block_t * AudioOutputAD5754Dual::block_input[8] = {
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
-bool AudioOutputSPI::update_responsibility = false;
+bool AudioOutputAD5754Dual::update_responsibility = false;
 
-unsigned int AudioOutputSPI::read_index = 0;
-unsigned int AudioOutputSPI::DA_SYNC = 16;
-volatile uint8_t AudioOutputSPI::buf[6] = {0,0,0,0,0,0};
-int AudioOutputSPI::voltages[8] = {0,0,0,0,0,0,0,0};
-unsigned int AudioOutputSPI::bytesReceived = 0;
+unsigned int AudioOutputAD5754Dual::read_index = 0;
+unsigned int AudioOutputAD5754Dual::DA_SYNC = 16;
+volatile uint8_t AudioOutputAD5754Dual::buf[6] = {0,0,0,0,0,0};
+int AudioOutputAD5754Dual::voltages[8] = {0,0,0,0,0,0,0,0};
+unsigned int AudioOutputAD5754Dual::bytesTransmitted = 0;
 
-DMAChannel AudioOutputSPI::dma(false);
+DMAChannel AudioOutputAD5754Dual::dma(false);
 
-void AudioOutputSPI::begin(void)
+void AudioOutputAD5754Dual::begin(void)
 {
     pinMode(DA_SYNC, OUTPUT);
     digitalWrite(DA_SYNC, HIGH);
 	SPI1.begin();
     delay(1);
 
+    // Initialize DAC0, DAC1
     SPI1.beginTransaction(SPISettings());
     digitalWrite(DA_SYNC, LOW);
     uint8_t configureDac[] = {
@@ -90,9 +91,9 @@ void AudioOutputSPI::begin(void)
     SPI1.transfer(configureDac, 6);
     SPI1.endTransaction();
     digitalWrite(DA_SYNC, HIGH);
+    delayMicroseconds(10);
 
-    delay(1);
-
+    // Set voltage range for DAC0, DAC1
     digitalWrite(DA_SYNC, LOW);
     uint8_t configureDacVoltageRange[] = {
             0x28,
@@ -102,17 +103,15 @@ void AudioOutputSPI::begin(void)
             0x00,
             AD5754R_UNIPOLAR_10_RANGE
     };
-
     SPI1.beginTransaction(SPISettings());
     SPI1.transfer(configureDacVoltageRange, 6);
     SPI1.endTransaction();
-
     digitalWrite(DA_SYNC, HIGH);
+    delayMicroseconds(10);
 
-    delay(1);
-
+    // Disable SPI ouput from DAC (not needed - AD5754R_SDO_DISABLE) :
     digitalWrite(DA_SYNC, LOW);
-    uint8_t configureDacVoltageRange2[] = {
+    uint8_t configureDataOutputDisabled[] = {
             0x0C,
             0x00,
             0x00,
@@ -120,16 +119,12 @@ void AudioOutputSPI::begin(void)
             0x00,
             0x00
     };
-
     SPI1.beginTransaction(SPISettings());
-    SPI1.transfer(configureDacVoltageRange2, 6);
+    SPI1.transfer(configureDataOutputDisabled, 6);
     SPI1.endTransaction();
-
     digitalWrite(DA_SYNC, HIGH);
+    delayMicroseconds(10);
 
-    delay(1);
-
-    config_spi();
     config_dma();
 
 	for (int i=0; i < 8; i++) {
@@ -138,39 +133,39 @@ void AudioOutputSPI::begin(void)
 }
 
 
-void AudioOutputSPI::isr(void)
+void AudioOutputAD5754Dual::isr(void)
 {
     dma.clearInterrupt();
     SPI1.endTransaction();
 
-    IMXRT_LPSPI3_S.FCR = LPSPI_FCR_TXWATER(15); // _spi_fcr_save; // restore the FSR status...
-    IMXRT_LPSPI3_S.DER = 0;
-    IMXRT_LPSPI3_S.CR = LPSPI_CR_MEN | LPSPI_CR_RRF | LPSPI_CR_RTF; // actually clear both...
-    IMXRT_LPSPI3_S.SR = 0x3f00;    // clear out all of the other status...
+    IMXRT_LPSPI3_S.FCR = LPSPI_FCR_TXWATER(15); // FIFO control register: set transmit watermark
+    IMXRT_LPSPI3_S.DER = 0;                     // DMA enable register: disable DMA TX
+    IMXRT_LPSPI3_S.CR = LPSPI_CR_MEN | LPSPI_CR_RRF | LPSPI_CR_RTF; // Control register... ?
+    IMXRT_LPSPI3_S.SR = 0x3f00;                 // Status register: clear out all of the other status...
 
-    while (IMXRT_LPSPI3_S.FSR & 0x1f);
-    while (IMXRT_LPSPI3_S.SR & LPSPI_SR_MBF) ;  //Status Register? Module Busy flag
+    while (IMXRT_LPSPI3_S.FSR & 0x1f);          //FIFO Status Register? wait until FIFO is empty before continuing...
+    while (IMXRT_LPSPI3_S.SR & LPSPI_SR_MBF) ;  //Status Register? Module Busy flag, wait until SPI is not busy...
     digitalWrite(DA_SYNC, HIGH);
 
-    bytesReceived++;
+    bytesTransmitted++;
 
-    if (bytesReceived < 4) {
-        buf[0] = bytesReceived;                   //DAC0, channel=count
-        buf[1] = voltages[bytesReceived] >> 8;
-        buf[2] = voltages[bytesReceived] & 0xff;
-        buf[3] = bytesReceived;                   //DAC1, channel=count
-        buf[4] = voltages[bytesReceived+4] >> 8;
-        buf[5] = voltages[bytesReceived+4] & 0xff;
+    if (bytesTransmitted < 4) {
+        buf[0] = bytesTransmitted;                   //DAC0, channel=count
+        buf[1] = voltages[bytesTransmitted] >> 8;
+        buf[2] = voltages[bytesTransmitted] & 0xff;
+        buf[3] = bytesTransmitted;                   //DAC1, channel=count
+        buf[4] = voltages[bytesTransmitted+4] >> 8;
+        buf[5] = voltages[bytesTransmitted+4] & 0xff;
     } else {
-        bytesReceived = 0;
+        bytesTransmitted = 0;
     }
 
     beginTransfer();
 }
 const uint32_t zero_level = 0xFFFF / 2;
-void AudioOutputSPI::beginTransfer()
+void AudioOutputAD5754Dual::beginTransfer()
 {
-    if (bytesReceived == 0) {
+    if (bytesTransmitted == 0) {
 
         read_index++;
         if (read_index == 128) return;
@@ -197,21 +192,23 @@ void AudioOutputSPI::beginTransfer()
 
     digitalWrite(DA_SYNC, LOW);
 
-    IMXRT_LPSPI3_S.TCR = (IMXRT_LPSPI3_S.TCR & ~(LPSPI_TCR_FRAMESZ(31))) | LPSPI_TCR_FRAMESZ(7);
-    IMXRT_LPSPI3_S.FCR = 0;
-    // Lets try to output the first byte to make sure that we are in 8 bit mode...
-    IMXRT_LPSPI3_S.DER = LPSPI_DER_TDDE;//| LPSPI_DER_RDDE; //enable DMA on both TX and RX
-    IMXRT_LPSPI3_S.SR = 0x3f00; // clear out all of the other status...
-    SPI1.beginTransaction(SPISettings(12000000, MSBFIRST, SPI_MODE0));
+    IMXRT_LPSPI3_S.TCR = (IMXRT_LPSPI3_S.TCR & ~(LPSPI_TCR_FRAMESZ(31))) | LPSPI_TCR_FRAMESZ(7); // Transmit Control Register: ?
+    IMXRT_LPSPI3_S.FCR = 0; // FIFO control register
+
+    IMXRT_LPSPI3_S.DER = LPSPI_DER_TDDE;//DMA Enable register: enable DMA on TX
+    IMXRT_LPSPI3_S.SR = 0x3f00; // StatusRegister: clear out all of the other status...
+    SPI1.beginTransaction(SPISettings(14000000, MSBFIRST, SPI_MODE0));
     dma.enable();
 }
 
 
-void AudioOutputSPI::update(void)
+void AudioOutputAD5754Dual::update(void)
 {
-    //if (IMXRT_LPSPI3_S.SR & LPSPI_SR_MBF) return;  //already busy
-    //if (IMXRT_LPSPI3_S.FSR & 0x1f) return;
-
+    // not needed, as tx buffer finishes before update is called again. (SPI clk 14MHz is good, 4MHz too slow, need this code below to drop frames
+#ifdef SLOW_SPEED_SPI
+    if (IMXRT_LPSPI3_S.SR & LPSPI_SR_MBF) return;  //already busy, drop frames...
+    if (IMXRT_LPSPI3_S.FSR & 0x1f) return; // SPI fifo still busy, drop frames...
+#endif
 	audio_block_t *prev[8];
 	unsigned int i;
 
@@ -229,7 +226,7 @@ void AudioOutputSPI::update(void)
     beginTransfer();
 }
 
-void AudioOutputSPI::config_dma(void)
+void AudioOutputAD5754Dual::config_dma(void)
 {
     dma.begin(true); // allocate the DMA channel first
     dma.TCD->SADDR = buf;
@@ -248,8 +245,3 @@ void AudioOutputSPI::config_dma(void)
     dma.attachInterrupt(isr);
     dma.interruptAtCompletion();
 }
-
-void AudioOutputSPI::config_spi(void)
-{
-}
-

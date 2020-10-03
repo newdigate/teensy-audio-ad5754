@@ -34,16 +34,16 @@
 #include "AudioStream.h"
 #include "DMAChannel.h"
 
-class AudioOutputSPI : public AudioStream
+class AudioOutputAD5754Dual : public AudioStream
 {
 public:
-	AudioOutputSPI() : AudioStream(8, inputQueueArray) {
+	AudioOutputAD5754Dual() : AudioStream(8, inputQueueArray) {
 	    read_index = 0;
 	    begin();
 	}
 	virtual void update(void);
 	void begin(void);
-	//friend class AudioInputTDM;
+
 protected:
 	static audio_block_t *block_input[8];
 	static bool update_responsibility;
@@ -54,13 +54,10 @@ protected:
     static unsigned int DA_SYNC;
     static volatile uint8_t buf[6];
     static int voltages[8];
-    static unsigned int bytesReceived;
+    static unsigned int bytesTransmitted;
 private:
 	audio_block_t *inputQueueArray[16];
 
-	void config_spi(void);
 	void config_dma(void);
-
-
 };
 #endif
