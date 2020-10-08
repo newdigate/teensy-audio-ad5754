@@ -63,7 +63,6 @@ audio_block_t * AudioOutputAD5754Dual::block_input[8] = {
 };
 bool AudioOutputAD5754Dual::update_responsibility = false;
 bool AudioOutputAD5754Dual::enable_cable_select = true;
-unsigned int AudioOutputAD5754Dual::paddingCount = 0;
 unsigned int AudioOutputAD5754Dual::read_index = 0;
 unsigned int AudioOutputAD5754Dual::DA_SYNC = 16;
 volatile uint8_t AudioOutputAD5754Dual::buf[6] = {0,0,0,0,0,0};
@@ -98,31 +97,15 @@ void AudioOutputAD5754Dual::begin(void)
     // Set voltage range for DAC0, DAC1
     digitalWrite(DA_SYNC, LOW);
     uint8_t configureDacVoltageRange[] = {
-            0x28,
+            (AD5754R_REG_RANGE_SELECT << 3) + AD5754R_DAC_ALL,
             0x00,
-            AD5754R_UNIPOLAR_10_RANGE,
-            0x28,
+            AD5754R_BIPOLAR_10_RANGE,
+            (AD5754R_REG_RANGE_SELECT << 3) + AD5754R_DAC_ALL,
             0x00,
-            AD5754R_UNIPOLAR_10_RANGE
+            AD5754R_BIPOLAR_10_RANGE
     };
     SPI1.beginTransaction(SPISettings());
     SPI1.transfer(configureDacVoltageRange, 6);
-    SPI1.endTransaction();
-    digitalWrite(DA_SYNC, HIGH);
-    delayMicroseconds(10);
-
-    // Disable SPI ouput from DAC (not needed - AD5754R_SDO_DISABLE) :
-    digitalWrite(DA_SYNC, LOW);
-    uint8_t configureDataOutputDisabled[] = {
-            0x0C,
-            0x00,
-            0x00,
-            0x0C,
-            0x00,
-            0x00
-    };
-    SPI1.beginTransaction(SPISettings());
-    SPI1.transfer(configureDataOutputDisabled, 6);
     SPI1.endTransaction();
     digitalWrite(DA_SYNC, HIGH);
     delayMicroseconds(10);
@@ -166,9 +149,8 @@ void AudioOutputAD5754Dual::isr(void)
         buf[2] = 0xff;
         buf[3] = 0xff;
         buf[4] = 0xff;
-        paddingCount++;
-        paddingCount%=3;
-        int numberOfBytesToPad = (paddingCount == 0)? 5 : 6;
+        buf[5] = 0xff;
+        int numberOfBytesToPad = 6;
         dma.TCD->SLAST = -numberOfBytesToPad;
         dma.TCD->CITER_ELINKNO = numberOfBytesToPad;
         dma.TCD->BITER_ELINKNO = numberOfBytesToPad;
