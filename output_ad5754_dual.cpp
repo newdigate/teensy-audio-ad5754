@@ -62,17 +62,17 @@ audio_block_t * AudioOutputAD5754Dual::block_input[8] = {
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
 bool AudioOutputAD5754Dual::update_responsibility = false;
-bool AudioOutputAD5754Dual::enable_cable_select = true;
-unsigned int AudioOutputAD5754Dual::read_index = 0;
+unsigned int AudioOutputAD5754Dual::read_index = 128;
 unsigned int AudioOutputAD5754Dual::DA_SYNC = 16;
 volatile uint8_t AudioOutputAD5754Dual::buf[6] = {0,0,0,0,0,0};
 int AudioOutputAD5754Dual::voltages[8] = {0,0,0,0,0,0,0,0};
 unsigned int AudioOutputAD5754Dual::commandsTransmitted = 0;
-
+IntervalTimer AudioOutputAD5754Dual::_timer = IntervalTimer();
 DMAChannel AudioOutputAD5754Dual::dma(false);
 
 void AudioOutputAD5754Dual::begin(void)
 {
+    //pinMode(0, OUTPUT); //debug pin
     pinMode(DA_SYNC, OUTPUT);
     digitalWrite(DA_SYNC, HIGH);
 	SPI1.begin();
@@ -93,6 +93,7 @@ void AudioOutputAD5754Dual::begin(void)
     SPI1.endTransaction();
     digitalWrite(DA_SYNC, HIGH);
     delayMicroseconds(10);
+
 
     // Set voltage range for DAC0, DAC1
     digitalWrite(DA_SYNC, LOW);
@@ -115,11 +116,21 @@ void AudioOutputAD5754Dual::begin(void)
 	for (int i=0; i < 8; i++) {
 		block_input[i] = NULL;
 	}
+
+    _timer.priority(1);
 }
 
+void AudioOutputAD5754Dual::timer(void) {
+    noInterrupts();
+    _timer.end();
+    interrupts();
+    if (read_index < 128)
+        beginTransfer();
+}
 
 void AudioOutputAD5754Dual::isr(void)
 {
+
     dma.clearInterrupt();
     SPI1.endTransaction();
 
@@ -130,48 +141,40 @@ void AudioOutputAD5754Dual::isr(void)
 
     while (IMXRT_LPSPI3_S.FSR & 0x1f);          //FIFO Status Register? wait until FIFO is empty before continuing...
     while (IMXRT_LPSPI3_S.SR & LPSPI_SR_MBF) ;  //Status Register? Module Busy flag, wait until SPI is not busy...
-    if (enable_cable_select)
-        digitalWrite(DA_SYNC, HIGH);
+
+    unsigned int tx;
+    digitalWrite(DA_SYNC, HIGH);
 
     commandsTransmitted++;
+    tx = commandsTransmitted;
 
-    if (commandsTransmitted < 4) {
+    if (tx < 4) {
         buf[0] = commandsTransmitted;                   //DAC0, channel=count
         buf[1] = voltages[commandsTransmitted] >> 8;
         buf[2] = voltages[commandsTransmitted] & 0xff;
         buf[3] = commandsTransmitted;                   //DAC1, channel=count
         buf[4] = voltages[commandsTransmitted+4] >> 8;
         buf[5] = voltages[commandsTransmitted+4] & 0xff;
-    } else  if (commandsTransmitted == 4) {
-        enable_cable_select = false;
-        buf[0] = 0xff;
-        buf[1] = 0xff;
-        buf[2] = 0xff;
-        buf[3] = 0xff;
-        buf[4] = 0xff;
-        buf[5] = 0xff;
-        int numberOfBytesToPad = 6;
-        dma.TCD->SLAST = -numberOfBytesToPad;
-        dma.TCD->CITER_ELINKNO = numberOfBytesToPad;
-        dma.TCD->BITER_ELINKNO = numberOfBytesToPad;
-    } else {
-        enable_cable_select = true;
-        //restore dma buffer size
-        dma.TCD->SLAST = -sizeof(buf);
-        dma.TCD->CITER_ELINKNO = sizeof(buf);
-        dma.TCD->BITER_ELINKNO = sizeof(buf);
-        commandsTransmitted = 0;
-    }
 
-    beginTransfer();
+        beginTransfer();
+    } else {
+        commandsTransmitted = 0;
+        read_index++;
+        _timer.begin(timer, (1000000.0/44100.0) - 12.4);
+    }
 }
 const uint32_t zero_level = 0xFFFF / 2;
 void AudioOutputAD5754Dual::beginTransfer()
 {
+
     if (commandsTransmitted == 0) {
 
-        read_index++;
-        if (read_index == 128) return;
+        if (read_index >= 128){
+
+
+            return;
+        }
+
 
         voltages[0] = (block_input[0] != NULL) ? block_input[0]->data[read_index] + zero_level : zero_level;
         voltages[1] = (block_input[1] != NULL) ? block_input[1]->data[read_index] + zero_level : zero_level;
@@ -193,26 +196,24 @@ void AudioOutputAD5754Dual::beginTransfer()
         buf[5] = voltages[4] & 0xff;
     }
 
-    if (enable_cable_select)
+    if (commandsTransmitted < 4) {
         digitalWrite(DA_SYNC, LOW);
+        IMXRT_LPSPI3_S.TCR = (IMXRT_LPSPI3_S.TCR & ~(LPSPI_TCR_FRAMESZ(31))) | LPSPI_TCR_FRAMESZ(7); // Transmit Control Register: ?
+        IMXRT_LPSPI3_S.FCR = 0; // FIFO control register
 
-    IMXRT_LPSPI3_S.TCR = (IMXRT_LPSPI3_S.TCR & ~(LPSPI_TCR_FRAMESZ(31))) | LPSPI_TCR_FRAMESZ(7); // Transmit Control Register: ?
-    IMXRT_LPSPI3_S.FCR = 0; // FIFO control register
+        IMXRT_LPSPI3_S.DER = LPSPI_DER_TDDE;//DMA Enable register: enable DMA on TX
+        IMXRT_LPSPI3_S.SR = 0x3f00; // StatusRegister: clear out all of the other status...
+        SPI1.beginTransaction(SPISettings(25000000, MSBFIRST, SPI_MODE0));
+        dma.enable();
 
-    IMXRT_LPSPI3_S.DER = LPSPI_DER_TDDE;//DMA Enable register: enable DMA on TX
-    IMXRT_LPSPI3_S.SR = 0x3f00; // StatusRegister: clear out all of the other status...
-    SPI1.beginTransaction(SPISettings(14000000, MSBFIRST, SPI_MODE0));
-    dma.enable();
+    }
 }
 
 
 void AudioOutputAD5754Dual::update(void)
 {
-    // not needed, as tx buffer finishes before update is called again. (SPI clk 14MHz is good, 4MHz too slow, need this code below to drop frames
-#ifdef SLOW_SPEED_SPI
-    if (IMXRT_LPSPI3_S.SR & LPSPI_SR_MBF) return;  //already busy, drop frames...
-    if (IMXRT_LPSPI3_S.FSR & 0x1f) return; // SPI fifo still busy, drop frames...
-#endif
+    //digitalWrite(0, LOW);
+
 	audio_block_t *prev[8];
 	unsigned int i;
 
@@ -221,13 +222,15 @@ void AudioOutputAD5754Dual::update(void)
 		prev[i] = block_input[i];
 		block_input[i] = receiveReadOnly(i);
 	}
+    read_index = 0;
+    commandsTransmitted = 0;
 	__enable_irq();
 
 	for (i=0; i < 8; i++) {
 		if (prev[i]) release(prev[i]);
 	}
-    read_index = 0;
     beginTransfer();
+    //digitalWrite(0, HIGH);
 }
 
 void AudioOutputAD5754Dual::config_dma(void)
@@ -248,4 +251,5 @@ void AudioOutputAD5754Dual::config_dma(void)
     dma.disableOnCompletion();
     dma.attachInterrupt(isr);
     dma.interruptAtCompletion();
+
 }

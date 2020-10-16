@@ -1,8 +1,5 @@
-//
-// Created by Nicholas Newdigate on 16/02/2019.
-//
-/*
+#ifdef BUILD_TEENSYDUINO_MAIN
 int main() {
 
 }
- */
+#endif

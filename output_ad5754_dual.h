@@ -33,6 +33,10 @@
 #include "Arduino.h"
 #include "AudioStream.h"
 #include "DMAChannel.h"
+#include <TimerOne.h>
+
+
+
 
 class AudioOutputAD5754Dual : public AudioStream
 {
@@ -55,10 +59,13 @@ protected:
     static volatile uint8_t buf[6];
     static int voltages[8];
     static unsigned int commandsTransmitted;
-    static bool enable_cable_select;
+
 private:
 	audio_block_t *inputQueueArray[16];
 
 	void config_dma(void);
+
+	static void timer(void);
+	static IntervalTimer _timer;
 };
 #endif

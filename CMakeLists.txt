@@ -21,6 +21,7 @@ set(CPU cortex-m7)
 set(TOOLSPATH "${ARDUINOPATH}hardware/tools/")
 set(COMPILERPATH "${TOOLSPATH}arm/bin/")
 set(COREPATH "${ARDUINOPATH}hardware/teensy/avr/cores/teensy4/")
+set(CUSTOM_LIBRARY_PATH "/Users/johnsmith/Documents/Arduino/libraries/")
 
 # Normal toolchain configuration
 #
@@ -77,7 +78,8 @@ set(TEENSY_DEFINITIONS USB_SERIAL
         TEENSYDUINO=151
         ARDUINO=10812
         ARDUINO_TEENSY40
-        USB_SERIAL)
+        USB_SERIAL
+        BUILD_TEENSYDUINO_MAIN)
 
 
 # Macros to wrap add_[executable|library] for seamless Teensy integration
@@ -111,7 +113,11 @@ macro(import_arduino_library LIB_NAME)
     set(LIB_DIR "${ARDUINO_LIB_ROOT}/${LIB_NAME}")
     #message(LIB_DIR ${LIB_DIR})
     if(NOT EXISTS "${LIB_DIR}")
-        message(FATAL_ERROR "Could not find the directory for library '${LIB_NAME}'")
+        message("Could not find the directory for library '${LIB_NAME}' (${LIB_DIR})")
+        set(LIB_DIR "${CUSTOM_LIBRARY_PATH}/${LIB_NAME}")
+        if(NOT EXISTS "${LIB_DIR}")
+            message(FATAL_ERROR "Could not find the directory for library '${LIB_NAME}' (${LIB_DIR})")
+        endif(NOT EXISTS "${LIB_DIR}")
     endif(NOT EXISTS "${LIB_DIR}")
 
     # Add it to the include path.
@@ -136,7 +142,6 @@ import_arduino_library(Wire)
 import_arduino_library(Audio)
 import_arduino_library(SPI)
 import_arduino_library(SD)
-#import_arduino_library(SerialFlash)
 
 teensy_add_executable(TeensyAudioSPILibrary
         main.cpp
