@@ -121,16 +121,15 @@ void AudioOutputAD5754Dual::begin(void)
 }
 
 void AudioOutputAD5754Dual::timer(void) {
-    noInterrupts();
     _timer.end();
-    interrupts();
     if (read_index < 128)
         beginTransfer();
 }
 
 void AudioOutputAD5754Dual::isr(void)
 {
-
+    commandsTransmitted++;
+    unsigned int tx = commandsTransmitted;
     dma.clearInterrupt();
     SPI1.endTransaction();
 
@@ -142,11 +141,10 @@ void AudioOutputAD5754Dual::isr(void)
     while (IMXRT_LPSPI3_S.FSR & 0x1f);          //FIFO Status Register? wait until FIFO is empty before continuing...
     while (IMXRT_LPSPI3_S.SR & LPSPI_SR_MBF) ;  //Status Register? Module Busy flag, wait until SPI is not busy...
 
-    unsigned int tx;
+
     digitalWrite(DA_SYNC, HIGH);
 
-    commandsTransmitted++;
-    tx = commandsTransmitted;
+
 
     if (tx < 4) {
         buf[0] = commandsTransmitted;                   //DAC0, channel=count
@@ -160,7 +158,7 @@ void AudioOutputAD5754Dual::isr(void)
     } else {
         commandsTransmitted = 0;
         read_index++;
-        _timer.begin(timer, (1000000.0/44100.0) - 12.4);
+
     }
 }
 const uint32_t zero_level = 0xFFFF / 2;
@@ -203,7 +201,8 @@ void AudioOutputAD5754Dual::beginTransfer()
 
         IMXRT_LPSPI3_S.DER = LPSPI_DER_TDDE;//DMA Enable register: enable DMA on TX
         IMXRT_LPSPI3_S.SR = 0x3f00; // StatusRegister: clear out all of the other status...
-        SPI1.beginTransaction(SPISettings(25000000, MSBFIRST, SPI_MODE0));
+        _timer.begin(timer, (1000000.0/44100.0)-13.055);
+        SPI1.beginTransaction(SPISettings(20000000, MSBFIRST, SPI_MODE0));
         dma.enable();
 
     }
